@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Decentralized Chat App</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    #peerInfo {
+      font-weight: bold;
+      background-color: #fff3cd;
+      padding: 10px;
+      border: 1px solid #ffeeba;
+    }
+    #connectionStatus {
+      color: red;
+      padding: 10px;
+      border: 1px solid #ccc;
+    }
+    #chatMessages {
+      list-style: none;
+      padding: 10px;
+      max-height: 300px;
+      overflow-y: auto;
+      border: 1px solid #ccc;
+      margin: 10px 0;
+      background-color: #f0f0f0;
+    }
+    #chatMessages li {
+      margin: 5px 0;
+      padding: 5px;
+    }
+    #chatMessages li.my-message {
+      background-color: #e6f3ff;
+      text-align: right;
+    }
+    #messageInput {
+      width: 300px;
+      margin-right: 10px;
+    }
+    #peerIdInput {
+      width: 300px;
+      margin-right: 10px;
+    }
+    button {
+      padding: 5px 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Decentralized Chat Lobby</h1>
+  <div>Connected: <span id="peerCount">0</span> peers</div>
+  <div id="peerInfo">My peer ID: Initializing...</div>
+  <div id="connectionStatus"></div>
+  <h3>Chat</h3>
+  <ul id="chatMessages"></ul>
+  <input id="messageInput" placeholder="Type a message" type="text">
+  <button onclick="window.sendMessage()">Send</button>
+  <br><br>
+  <input id="peerIdInput" placeholder="Enter peer ID to connect" type="text">
+  <button onclick="window.connectToPeer()">Connect</button>
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
