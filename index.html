@@ -4,12 +4,19 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Decentralized Mesh Chat</title>
-  <!-- Optional: Remove if style.css isn't available -->
-  <!-- <link rel="stylesheet" href="style.css"> -->
 </head>
 <body>
   <h1>Decentralized Mesh Chat</h1>
-  <div>Connected: <span id="peerCount">0</span> peers</div>
+  <div>
+    Connected: <span id="peerCount">0</span> peers |
+    Base peer: <span id="basePeerStatus">Disconnected</span>
+  </div>
+  <div id="peerListDisplay">
+    <strong>Peers:</strong>
+    <ul id="peerList"></ul>
+    <strong>Base Peer ID:</strong>
+    <div id="basePeerIdDisplay">Not connected</div>
+  </div>
   <div id="peerInfo">My peer ID: <span id="myPeerId">Initializing...</span></div>
   <div id="connectionStatus"></div>
   <h3>Chat</h3>
@@ -31,7 +38,10 @@
       secure: true,
       config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
     });
-    let basePeer = null; // Initialized only if ID is available
+    let basePeer = null;
+    const peerList = document.getElementById('peerList');
+    const basePeerIdDisplay = document.getElementById('basePeerIdDisplay');
+    const basePeerStatus = document.getElementById('basePeerStatus');
     const peerCount = document.getElementById('peerCount');
     const chatMessages = document.getElementById('chatMessages');
     const messageInput = document.getElementById('messageInput');
@@ -46,7 +56,7 @@
     let myPeerId = null;
     let baseConnection = null;
 
-    // Initialize random peer and attempt base peer
+    // Initialize peer and attempt base peer
     peer.on('open', (id) => {
       isInitialized = true;
       myPeerId = id;
@@ -54,8 +64,18 @@
       console.log('My peer ID:', id);
       tryInitializeBasePeer();
       connectToBasePeer();
-      startPeerResync(); // Periodically resync peers
+      startPeerResync();
       updateUI();
+    });
+
+    peer.on('connection', (conn) => {
+      console.log('Incoming connection from:', conn.peer);
+      setupConnection(conn); // Handle incoming connections
+    });
+
+    peer.on('error', (err) => {
+      connectionStatusDiv.textContent = 'Peer error: ' + err.message;
+      console.error('Peer error:', err);
     });
 
     function tryInitializeBasePeer() {
@@ -78,43 +98,40 @@
         });
         basePeer.on('error', (err) => {
           console.error('Base peer error (ignored if ID taken):', err);
-          basePeer = null; // Clear if initialization fails
+          basePeer = null;
         });
       } catch (err) {
         console.log('Base peer ID taken, connecting as client:', err.message);
-        basePeer = null; // Ensure no base peer if ID is taken
+        basePeer = null;
       }
     }
-
-    peer.on('error', (err) => {
-      connectionStatusDiv.textContent = 'Peer error: ' + err.message;
-      console.error('Peer error:', err);
-    });
 
     function connectToBasePeer() {
       if (isInitialized && !baseConnection) {
         baseConnection = peer.connect(BASE_PEER_ID);
         baseConnection.on('open', () => {
           console.log('Connected to base peer:', BASE_PEER_ID);
+          basePeerStatus.textContent = 'Connected';
           baseConnection.send({ type: 'newPeer', peerId: myPeerId });
           baseConnection.send({ type: 'requestPeers' });
         });
         baseConnection.on('data', (data) => {
           console.log('Received data from base peer:', data);
-          if (data.type === 'newPeer') {
-            connectToNewPeer(data.peerId);
+          if (data.type === 'newPeer' && data.peerId !== myPeerId) {
+            connectToNewPeer(data.peerId); // Connect directly to new peer
           } else if (data.type === 'peerList') {
             data.peerIds.forEach(peerId => connectToNewPeer(peerId));
-          } else if (data.type === 'message') {
-            handleMessage(data);
           }
+          // Note: Removed message handling here to avoid base peer relaying messages
         });
         baseConnection.on('error', (err) => {
+          basePeerStatus.textContent = 'Error';
           connectionStatusDiv.textContent = 'Base connection error: ' + err.message;
           console.error('Base connection error:', err);
         });
         baseConnection.on('close', () => {
           baseConnection = null;
+          basePeerStatus.textContent = 'Disconnected';
           setTimeout(connectToBasePeer, 5000);
           console.log('Base peer connection lost, retrying...');
         });
@@ -128,12 +145,11 @@
           console.log('Base peer received data:', data);
           if (data.type === 'newPeer') {
             broadcastToBasePeers(data);
-            connectToNewPeer(data.peerId); // Base peer connects to new peers
+            connectToNewPeer(data.peerId); // Base peer also connects to new peers
           } else if (data.type === 'requestPeers') {
             broadcastKnownPeers();
-          } else if (data.type === 'message') {
-            broadcastToBasePeers(data);
           }
+          // Note: Removed message relaying to focus on peer discovery
         });
         conn.on('close', () => {
           console.log('Base peer connection closed with:', conn.peer);
@@ -145,82 +161,74 @@
     }
 
     function broadcastToBasePeers(data) {
-      if (basePeer && basePeer._connections) {
-        console.log('Broadcasting', data.type, 'to', basePeer._connections.length, 'connections');
-        basePeer._connections.forEach((conn) => {
-          if (conn.open) {
-            console.log('Sending', data.type, data.peerId || '', 'to', conn.peer);
-            conn.send(data);
-          }
+      if (basePeer && basePeer.connections) {
+        console.log('Broadcasting', data.type, 'to connections');
+        Object.values(basePeer.connections).forEach(conns => {
+          conns.forEach(conn => {
+            if (conn.open) {
+              console.log('Sending', data.type, data.peerId || '', 'to', conn.peer);
+              conn.send(data);
+            }
+          });
         });
       }
     }
 
     function broadcastKnownPeers() {
-      if (basePeer && basePeer._connections) {
+      if (basePeer && basePeer.connections) {
         const knownPeers = Array.from(peers).concat(myPeerId ? [myPeerId] : []);
         console.log('Broadcasting peer list:', knownPeers);
-        basePeer._connections.forEach((conn) => {
-          if (conn.open) {
-            conn.send({ type: 'peerList', peerIds: knownPeers });
-          }
+        Object.values(basePeer.connections).forEach(conns => {
+          conns.forEach(conn => {
+            if (conn.open) {
+              conn.send({ type: 'peerList', peerIds: knownPeers });
+            }
+          });
         });
       }
     }
 
     function connectToNewPeer(peerId) {
-      if (!peers.has(peerId) && peerId !== myPeerId) {
+      if (!peers.has(peerId) && peerId !== myPeerId && peerId !== BASE_PEER_ID) {
         console.log('Attempting to connect to new peer:', peerId);
         const conn = peer.connect(peerId);
-        let attempt = 0;
-        const maxAttempts = 3;
-        const retryInterval = 2000;
-
-        function tryConnect() {
-          conn.on('open', () => {
-            peers.add(conn.peer);
-            connections.set(conn.peer, conn);
-            console.log('Connection established with:', conn.peer);
-            conn.send({ type: 'newPeer', peerId: myPeerId });
-            conn.send({ type: 'sync', messages: messagesArray });
-            // Request peer list from new peer
-            conn.send({ type: 'requestPeers' });
-            updateUI();
-          });
-
-          conn.on('data', (data) => {
-            console.log('Received data from', conn.peer, ':', data);
-            if (data.type === 'newPeer' && data.peerId !== myPeerId && !peers.has(data.peerId)) {
-              console.log('Discovered new peer via', conn.peer, ':', data.peerId);
-              connectToNewPeer(data.peerId);
-            } else if (data.type === 'peerList') {
-              data.peerIds.forEach(pid => connectToNewPeer(pid));
-            } else if (data.type === 'sync' || data.type === 'message') {
-              handleMessage(data);
-            }
-          });
-
-          conn.on('error', (err) => {
-            attempt++;
-            console.error('Connection error with', peerId, 'attempt', attempt, ':', err.message);
-            if (attempt < maxAttempts) {
-              setTimeout(tryConnect, retryInterval);
-            } else {
-              connectionStatusDiv.textContent = 'Failed to connect to ' + peerId + ' after ' + maxAttempts + ' attempts';
-            }
-          });
-
-          conn.on('close', () => {
-            console.log('Connection attempt closed with:', peerId);
-            peers.delete(peerId);
-            connections.delete(peerId);
-            if (attempt < maxAttempts) {
-              setTimeout(tryConnect, retryInterval);
-            }
-          });
-        }
-        tryConnect();
+        setupConnection(conn);
       }
+    }
+
+    function setupConnection(conn) {
+      conn.on('open', () => {
+        peers.add(conn.peer);
+        connections.set(conn.peer, conn);
+        console.log('Connection established with:', conn.peer);
+        conn.send({ type: 'newPeer', peerId: myPeerId });
+        conn.send({ type: 'sync', messages: messagesArray });
+        updateUI();
+      });
+
+      conn.on('data', (data) => {
+        console.log('Received data from', conn.peer, ':', data);
+        if (data.type === 'newPeer' && data.peerId !== myPeerId && !peers.has(data.peerId)) {
+          console.log('Discovered new peer via', conn.peer, ':', data.peerId);
+          connectToNewPeer(data.peerId);
+        } else if (data.type === 'peerList') {
+          data.peerIds.forEach(pid => connectToNewPeer(pid));
+        } else if (data.type === 'sync' || data.type === 'message') {
+          handleMessage(data);
+        }
+      });
+
+      conn.on('error', (err) => {
+        console.error('Connection error with', conn.peer, ':', err.message);
+        connectionStatusDiv.textContent = 'Connection error with ' + conn.peer;
+      });
+
+      conn.on('close', () => {
+        console.log('Connection closed with:', conn.peer);
+        peers.delete(conn.peer);
+        connections.delete(conn.peer);
+        updateUI();
+      });
     }
 
     function handleMessage(data) {
@@ -236,14 +244,26 @@
         updateUI();
       }
     }
+    function handleIncomingData(data, fromPeerId) {
+      if (data.type === 'chat') {
+        messagesArray.push({ peerId: fromPeerId, text: data.text });
+        updateUI();
+      }
 
+      else if (data.type === 'connect-back') {
+        const theirId = data.from;
+        if (!peers.has(theirId) && theirId !== myPeerId) {
+          connectToPeer(theirId); // Bilateral connection
+        }
+      }
+    }
     function connectToPeer() {
       if (!isInitialized) {
         connectionStatusDiv.textContent = 'Error: Peer not initialized. Wait a moment and try again.';
         return;
       }
       const peerId = peerIdInput.value.trim();
-      if (!peerId || peerId === myPeerId) {
+      if (!peerId || peerId === myPeerId || peerId === BASE_PEER_ID) {
         connectionStatusDiv.textContent = 'Error: Invalid peer ID.';
         return;
       }
@@ -251,9 +271,30 @@
         connectionStatusDiv.textContent = 'Error: Already connected to this peer.';
         return;
       }
-      const conn = peer.connect(peerId);
-      setupPeerConnection(conn);
+      connectToNewPeer(peerId);
       peerIdInput.value = '';
+      conn.on('open', () => {
+          console.log(`Connected to peer ${peerId}`);
+          peers.add(peerId);
+          updateUI();
+
+          // Send "connect-back" notice
+          conn.send({ type: 'connect-back', from: myPeerId });
+
+          // Send chat history (if needed, optional)
+          for (const msg of messagesArray) {
+            conn.send({ type: 'chat', ...msg });
+          }
+
+          conn.on('data', (data) => {
+            handleIncomingData(data, peerId);
+          });
+
+          conn.on('close', () => {
+            peers.delete(peerId);
+            updateUI();
+          });
+        });
     }
 
     function sendMessage() {
@@ -275,6 +316,7 @@
       messagesArray.push(message);
       messagesArray.sort((a, b) => a.timestamp - b.timestamp);
       broadcastMessage({ type: 'message', messages: [message] });
+      messageInput.value = '';
       updateUI();
     }
 
@@ -290,22 +332,7 @@
           connections.delete(peerId);
         }
       });
-      if (baseConnection && baseConnection.open) {
-        console.log('Relaying message through base peer');
-        baseConnection.send(data);
-      }
       updateUI();
-    }
-
-    function updateUI() {
-      peerCount.textContent = peers.size + (myPeerId ? 1 : 0);
-      chatMessages.innerHTML = messagesArray
-        .map((m) => {
-          const isMyMessage = m.peerId === myPeerId;
-          return `<li${isMyMessage ? ' class="my-message"' : ''}>${m.peerId}: ${m.text}</li>`;
-        })
-        .join('');
-      chatMessages.scrollTop = chatMessages.scrollHeight;
     }
 
     function startPeerResync() {
@@ -314,8 +341,35 @@
           console.log('Resyncing peers via base peer');
           baseConnection.send({ type: 'requestPeers' });
         }
-      }, 5000); // Resync every 5 seconds
+      }, 5000);
     }
+
+    function updateUI() {
+    // Filter out base and self
+    const visiblePeers = [...peers].filter(pid => pid !== BASE_PEER_ID);
+    peerCount.textContent = visiblePeers.length + 1; // +1 includes self
+
+    // Update chat messages
+    chatMessages.innerHTML = messagesArray
+      .map((m) => {
+        const isMyMessage = m.peerId === myPeerId;
+        return `<li${isMyMessage ? ' class="my-message"' : ''}>${m.peerId}: ${m.text}</li>`;
+      })
+      .join('');
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    // Update peer list display
+    peerList.innerHTML = visiblePeers
+      .map(pid => `<li>${pid}</li>`)
+      .join('');
+
+    // Update base peer ID display
+    basePeerIdDisplay.textContent = (baseConnection && baseConnection.open)
+      ? BASE_PEER_ID
+      : 'Not connected';
+  }
+
+
 
     window.connectToPeer = connectToPeer;
     window.sendMessage = sendMessage;
